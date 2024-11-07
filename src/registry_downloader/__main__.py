@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import sys
 from registry_downloader.runner import run_downloader
 
 def parse_arguments() -> argparse.Namespace:
@@ -34,5 +35,15 @@ async def main() -> None:
         override_url=args.override_url
     )
 
+def cli() -> None:
+    """Command-line interface entry point."""
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    cli()

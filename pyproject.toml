@@ -11,13 +11,33 @@ dependencies = [
     "types-beautifulsoup4>=4.12.0.20241020",
     "types-tqdm>=4.66.0.20240417",
 ]
+authors = [
+    {name = "Your Name", email = "your.email@example.com"}
+]
+keywords = ["registry", "downloader", "business data"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Programming Language :: Python :: 3.12",
+]
 
 [project.scripts]
 registry-downloader = "registry_downloader.__main__:main"
+
+[project.urls]
+"Homepage" = "https://github.com/salomartin/registry_downloader"
+"Bug Tracker" = "https://github.com/salomartin/registry_downloader/issues"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.build]
+directory = "src"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/registry_downloader"]
+
+[tool.uv]
+compile-bytecode = true
