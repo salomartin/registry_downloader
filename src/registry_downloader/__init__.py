@@ -27,18 +27,32 @@ def parse_arguments() -> argparse.Namespace:
         nargs='+',
         help="Override URLs for specific countries in the format country=url"
     )
+    parser.add_argument(
+        "--max-workers",
+        type=int,
+        help="Maximum number of worker threads (defaults to CPU count)"
+    )
+    parser.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="Disable progress bars"
+    )
     return parser.parse_args()
 
 async def amain(
     download_dir: str = "./downloads",
     countries: Optional[Sequence[str]] = None,
-    override_url: Optional[Sequence[str]] = None
+    override_url: Optional[Sequence[str]] = None,
+    max_workers: Optional[int] = None,
+    show_progress: bool = True
 ) -> None:
     """Async entry point for the registry downloader."""
     await run_downloader(
         download_dir=download_dir,
         countries=countries,
-        override_url=override_url
+        override_url=override_url,
+        max_workers=max_workers,
+        show_progress=show_progress
     )
 
 def main() -> None:
@@ -48,7 +62,9 @@ def main() -> None:
         asyncio.run(amain(
             download_dir=args.download_dir,
             countries=args.countries,
-            override_url=args.override_url
+            override_url=args.override_url,
+            max_workers=args.max_workers,
+            show_progress=not args.no_progress
         ))
     except KeyboardInterrupt:
         sys.exit(1)

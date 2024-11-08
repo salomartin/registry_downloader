@@ -31,9 +31,15 @@ class HTTPClient:
             await cls._instance.aclose()
             cls._instance = None
 
+    @staticmethod
+    def get_domain(url: str) -> str:
+        """Get the domain from a URL."""
+        return urlparse(url).netloc
+
     @classmethod
     def get_domain_semaphore(cls, url: str) -> asyncio.Semaphore:
-        domain = urlparse(url).netloc
+        """Get or create a semaphore for the given URL's domain."""
+        domain = cls.get_domain(url)
         if domain not in cls._domain_semaphores:
             cls._domain_semaphores[domain] = asyncio.Semaphore(MAX_CONCURRENT_PER_DOMAIN)
         return cls._domain_semaphores[domain]

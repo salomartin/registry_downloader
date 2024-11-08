@@ -9,6 +9,9 @@ class URLFetcher(ABC):
         pass
 
 class BaseDownloader(URLFetcher):
+    def __init__(self, skip_head_request: bool = False) -> None:
+        self.skip_head_request = skip_head_request
+
     async def _fetch_and_parse(self, url: str) -> BeautifulSoup:
         response = await HTTPClient.fetch(url)
         return BeautifulSoup(response.text, 'html.parser')
