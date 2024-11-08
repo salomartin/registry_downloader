@@ -24,6 +24,10 @@ DEFAULT_COUNTRY_CONFIGS: Dict[str, Dict[str, Any]] = {
         'url': 'https://avaandmed.ariregister.rik.ee/et/avaandmete-allalaadimine',
         'downloader': EstonianDownloader()
     },
+    'ee_emta': {
+        'url': 'https://www.emta.ee/ariklient/amet-uudised-ja-kontakt/uudised-pressiinfo-statistika/statistika-ja-avaandmed',
+        'downloader': BaseDownloader()
+    },
     'lv': {
         'url': 'https://data.gov.lv/dati/lv/organization/ur',
         'downloader': LatvianDownloader()

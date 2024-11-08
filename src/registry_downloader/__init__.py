@@ -2,7 +2,7 @@ import argparse
 import asyncio
 import sys
 from typing import Optional, Sequence
-from registry_downloader.runner import run_downloader
+from registry_downloader.runner import run_downloader, DEFAULT_COUNTRY_CONFIGS
 
 __all__ = ['run_downloader', 'main']
 
@@ -18,7 +18,7 @@ def parse_arguments() -> argparse.Namespace:
         "--countries",
         type=str,
         nargs='+',
-        choices=['cz', 'ee', 'lv', 'fi', 'lt'],
+        choices=list(DEFAULT_COUNTRY_CONFIGS.keys()),
         help="List of countries to download data for"
     )
     parser.add_argument(
