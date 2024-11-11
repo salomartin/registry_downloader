@@ -32,9 +32,8 @@ jobs:
     - name: Build the project
       run: uv build
 
-
-    - name: Build the project
-      run: pytest tests/
+    - name: Test the project
+      run: uv run pytest
 
     - name: Publish package
       env:
