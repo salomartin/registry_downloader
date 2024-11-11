@@ -44,44 +44,43 @@ DEFAULT_COUNTRY_CONFIGS: Dict[str, Dict[str, Any]] = {
     }
 }
 
-def fix_encoding(data: bytes, sample_size: int = 50000) -> Tuple[bytes, str]:
+def is_binary_string(data: bytes) -> bool:
+    """Check if the byte string contains binary data."""
+    # If there are null bytes, likely binary
+    if b'\x00' in data:
+        return True
+    # Check for high ASCII characters
+    text_characters = bytearray({7, 8, 9, 10, 12, 13, 27} | set(range(0x20, 0x100)))
+    _null_trans = bytearray(256)
+    trans_table = bytes.maketrans(_null_trans, _null_trans)
+    nontext = data.translate(trans_table, text_characters)
+    return bool(nontext)
+
+def fix_encoding(data: bytes, sample_size: int = 256000) -> Tuple[bytes, str]:
     """Detect and fix encoding of byte data, converting to UTF-8 if needed."""
-    # Try common Estonian encodings first
-    estonian_encodings = ['cp1257', 'iso-8859-13', 'windows-1252', 'latin1']
-    
-    # Try each encoding with a small sample first
-    sample = data[:min(len(data), sample_size)]
-    
-    for enc in estonian_encodings:
-        try:
-            decoded = sample.decode(enc)
-            # If sample decodes, try full data
-            try:
-                decoded = data.decode(enc)
-                return decoded.encode('utf-8'), enc
-            except UnicodeError:
-                continue
-        except UnicodeError:
-            continue
-    
-    # If Estonian encodings fail, try UTF-8
+    # Check if data is binary
+    if is_binary_string(data[:sample_size]):
+        return data, 'binary'
+
+    # Try to decode as UTF-8
     try:
         data.decode('utf-8')
         return data, 'utf-8'
-    except UnicodeError:
+    except UnicodeDecodeError:
         pass
-    
-    # Last resort: use chardet
+
+    # Detect encoding using chardet
+    sample = data[:sample_size]
     result = chardet.detect(sample)
     encoding = result['encoding'] if result['encoding'] else 'utf-8'
-    
+
+    # Try to decode with detected encoding
     try:
         decoded = data.decode(encoding)
         return decoded.encode('utf-8'), encoding
-    except UnicodeError:
-        # Final fallback: force decode with replacement
-        decoded = data.decode('latin1', errors='replace')
-        return decoded.encode('utf-8'), 'latin1'
+    except (UnicodeDecodeError, LookupError):
+        # If decoding fails, return data as-is
+        return data, 'unknown'
 
 async def process_chunks(
     queue: Queue[bytes],
@@ -90,20 +89,37 @@ async def process_chunks(
 ) -> None:
     """Process chunks from queue and write to file."""
     def _write_chunks() -> None:
-        chunks: List[bytes] = []
+        buffer = bytearray()
         total_size = 0
 
         with open(file_path, 'wb') as f:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
-                # Collect all chunks first
                 while True:
                     try:
                         chunk = loop.run_until_complete(asyncio.wait_for(queue.get(), timeout=1.0))
                         if chunk == b'':  # EOF marker
+                            # Process buffer
+                            data = bytes(buffer)
+                            fixed_data, detected_encoding = fix_encoding(data)
+
+                            if detected_encoding == 'binary':
+                                logging.debug(f"{file_path} is binary, writing without modification")
+                                f.write(data)
+                            elif detected_encoding == 'utf-8':
+                                logging.debug(f"{file_path} is valid UTF-8, writing without modification")
+                                f.write(data)
+                            elif detected_encoding != 'unknown':
+                                logging.info(f"Converted {file_path} from {detected_encoding} to UTF-8")
+                                f.write(fixed_data)
+                            else:
+                                logging.warning(f"Unknown encoding for {file_path}, writing without modification")
+                                f.write(data)
+
+                            queue.task_done()
                             break
-                        chunks.append(chunk)
+                        buffer.extend(chunk)
                         total_size += len(chunk)
                         progress.update_download_progress(len(chunk))
                         queue.task_done()
@@ -112,25 +128,6 @@ async def process_chunks(
                     except Exception as e:
                         logging.error(f"Error writing chunk to {file_path}: {e}", exc_info=True)
                         break
-
-                # Quick check if all chunks are valid UTF-8
-                try:
-                    for chunk in chunks:
-                        chunk.decode('utf-8')
-                    # If we get here, content is already valid UTF-8
-                    for chunk in chunks:
-                        f.write(chunk)
-                    logging.debug(f"{file_path} is already valid UTF-8, skipping conversion")
-                except UnicodeError:
-                    # Only convert if not valid UTF-8
-                    data = b''.join(chunks)
-                    fixed_data, detected_encoding = fix_encoding(data)
-                    f.write(fixed_data)
-                    
-                    if detected_encoding.lower() not in ('utf-8', 'ascii'):
-                        logging.info(f"Converted {file_path} from {detected_encoding} to UTF-8")
-
-                queue.task_done()  # Final task done for EOF marker
             finally:
                 loop.close()
 
@@ -138,6 +135,37 @@ async def process_chunks(
         ThreadPoolManager.get_pool(),
         _write_chunks
     )
+
+def _process_zip_entry(
+    zip_file: zipfile.ZipFile,
+    zip_info: zipfile.ZipInfo,
+    target_path: str,
+    progress: ProgressManager
+) -> None:
+    """Process a single entry from the ZIP file."""
+    try:
+        with zip_file.open(zip_info) as source, open(target_path, 'wb') as target:
+            data = source.read()
+            progress.update_extract_progress(len(data))
+
+            # Process encoding
+            fixed_data, detected_encoding = fix_encoding(data)
+
+            if detected_encoding == 'binary':
+                logging.debug(f"{zip_info.filename} is binary, writing without modification")
+                target.write(data)
+            elif detected_encoding == 'utf-8':
+                logging.debug(f"{zip_info.filename} is valid UTF-8, writing without modification")
+                target.write(data)
+            elif detected_encoding != 'unknown':
+                logging.info(f"Converted {zip_info.filename} from {detected_encoding} to UTF-8")
+                target.write(fixed_data)
+            else:
+                logging.warning(f"Unknown encoding for {zip_info.filename}, writing without modification")
+                target.write(data)
+
+    except Exception as e:
+        logging.error(f"Error extracting {zip_info.filename}: {e}", exc_info=True)
 
 async def extract_zip_parallel(
     temp_filename: str,
@@ -149,70 +177,6 @@ async def extract_zip_parallel(
 ) -> None:
     """Extract ZIP file with parallel processing of entries."""
     try:
-        def _process_zip_entry(
-            zip_file: zipfile.ZipFile,
-            zip_info: zipfile.ZipInfo,
-            target_path: str
-        ) -> None:
-            try:
-                chunks: List[bytes] = []
-                sample_chunks: List[bytes] = []
-                total_size = 0
-                sample_size = 0
-                MAX_SAMPLE = 50000
-
-                with zip_file.open(zip_info) as source:
-                    while chunk := source.read(8192):
-                        chunks.append(chunk)
-                        total_size += len(chunk)
-                        
-                        if sample_size < MAX_SAMPLE:
-                            sample_chunks.append(chunk)
-                            sample_size += len(chunk)
-                        
-                        progress.update_extract_progress(len(chunk))
-
-                # Quick check if content is already valid UTF-8
-                try:
-                    for chunk in chunks:
-                        chunk.decode('utf-8')
-                    # If we get here, all chunks are valid UTF-8
-                    with open(target_path, 'wb') as target:
-                        for chunk in chunks:
-                            target.write(chunk)
-                except UnicodeError:
-                    # Need to convert encoding
-                    sample = b''.join(sample_chunks)
-                    if total_size > MAX_SAMPLE * 2:
-                        sample += chunks[-1]  # Add last chunk to sample
-                    
-                    result = chardet.detect(sample)
-                    encoding = result['encoding'] if result['encoding'] else 'utf-8'
-
-                    if encoding.lower() not in ('utf-8', 'ascii'):
-                        with open(target_path, 'wb') as target:
-                            decoder = codecs.getincrementaldecoder(encoding)()
-                            encoder = codecs.getincrementalencoder('utf-8')()
-                            
-                            for chunk in chunks:
-                                decoded = decoder.decode(chunk)
-                                encoded = encoder.encode(decoded)
-                                target.write(encoded)
-                            
-                            # Flush any remaining bytes
-                            final = encoder.encode('', final=True)
-                            if final:
-                                target.write(final)
-                        
-                        logging.info(f"Converted {zip_info.filename} from {encoding} to UTF-8")
-                    else:
-                        with open(target_path, 'wb') as target:
-                            for chunk in chunks:
-                                target.write(chunk)
-                        
-            except Exception as e:
-                logging.error(f"Error extracting {zip_info.filename}: {e}", exc_info=True)
-
         def _extract() -> None:
             with zipfile.ZipFile(temp_filename, 'r') as zip_file:
                 # Update total size once
@@ -236,7 +200,8 @@ async def extract_zip_parallel(
                             _process_zip_entry,
                             zip_file,
                             zip_info,
-                            extracted_path
+                            extracted_path,
+                            progress  # Pass progress manager
                         )
                     )
 
