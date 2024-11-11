@@ -2,9 +2,8 @@ import os
 import asyncio
 import logging
 import zipfile
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 from asyncio import Queue
-from io import BytesIO
 from .core.client import HTTPClient
 from .core.progress import ProgressManager
 from .core.threadpool import ThreadPoolManager
@@ -14,6 +13,9 @@ from .downloaders import (
     FinnishDownloader,
     LatvianDownloader,
 )
+import chardet
+import httpx
+import codecs
 
 DEFAULT_COUNTRY_CONFIGS: Dict[str, Dict[str, Any]] = {
     'cz': {
@@ -42,6 +44,45 @@ DEFAULT_COUNTRY_CONFIGS: Dict[str, Dict[str, Any]] = {
     }
 }
 
+def fix_encoding(data: bytes, sample_size: int = 50000) -> Tuple[bytes, str]:
+    """Detect and fix encoding of byte data, converting to UTF-8 if needed."""
+    # Try common Estonian encodings first
+    estonian_encodings = ['cp1257', 'iso-8859-13', 'windows-1252', 'latin1']
+    
+    # Try each encoding with a small sample first
+    sample = data[:min(len(data), sample_size)]
+    
+    for enc in estonian_encodings:
+        try:
+            decoded = sample.decode(enc)
+            # If sample decodes, try full data
+            try:
+                decoded = data.decode(enc)
+                return decoded.encode('utf-8'), enc
+            except UnicodeError:
+                continue
+        except UnicodeError:
+            continue
+    
+    # If Estonian encodings fail, try UTF-8
+    try:
+        data.decode('utf-8')
+        return data, 'utf-8'
+    except UnicodeError:
+        pass
+    
+    # Last resort: use chardet
+    result = chardet.detect(sample)
+    encoding = result['encoding'] if result['encoding'] else 'utf-8'
+    
+    try:
+        decoded = data.decode(encoding)
+        return decoded.encode('utf-8'), encoding
+    except UnicodeError:
+        # Final fallback: force decode with replacement
+        decoded = data.decode('latin1', errors='replace')
+        return decoded.encode('utf-8'), 'latin1'
+
 async def process_chunks(
     queue: Queue[bytes],
     file_path: str,
@@ -49,25 +90,47 @@ async def process_chunks(
 ) -> None:
     """Process chunks from queue and write to file."""
     def _write_chunks() -> None:
+        chunks: List[bytes] = []
+        total_size = 0
+
         with open(file_path, 'wb') as f:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
+                # Collect all chunks first
                 while True:
                     try:
-                        # Get chunk synchronously
                         chunk = loop.run_until_complete(asyncio.wait_for(queue.get(), timeout=1.0))
                         if chunk == b'':  # EOF marker
-                            queue.task_done()  # Call synchronously
                             break
-                        f.write(chunk)
+                        chunks.append(chunk)
+                        total_size += len(chunk)
                         progress.update_download_progress(len(chunk))
-                        queue.task_done()  # Call synchronously
+                        queue.task_done()
                     except asyncio.TimeoutError:
-                        continue  # Try again
+                        continue
                     except Exception as e:
                         logging.error(f"Error writing chunk to {file_path}: {e}", exc_info=True)
                         break
+
+                # Quick check if all chunks are valid UTF-8
+                try:
+                    for chunk in chunks:
+                        chunk.decode('utf-8')
+                    # If we get here, content is already valid UTF-8
+                    for chunk in chunks:
+                        f.write(chunk)
+                    logging.debug(f"{file_path} is already valid UTF-8, skipping conversion")
+                except UnicodeError:
+                    # Only convert if not valid UTF-8
+                    data = b''.join(chunks)
+                    fixed_data, detected_encoding = fix_encoding(data)
+                    f.write(fixed_data)
+                    
+                    if detected_encoding.lower() not in ('utf-8', 'ascii'):
+                        logging.info(f"Converted {file_path} from {detected_encoding} to UTF-8")
+
+                queue.task_done()  # Final task done for EOF marker
             finally:
                 loop.close()
 
@@ -92,10 +155,61 @@ async def extract_zip_parallel(
             target_path: str
         ) -> None:
             try:
-                with zip_file.open(zip_info) as source, open(target_path, 'wb') as target:
-                    while chunk := source.read(chunk_size):
-                        target.write(chunk)
+                chunks: List[bytes] = []
+                sample_chunks: List[bytes] = []
+                total_size = 0
+                sample_size = 0
+                MAX_SAMPLE = 50000
+
+                with zip_file.open(zip_info) as source:
+                    while chunk := source.read(8192):
+                        chunks.append(chunk)
+                        total_size += len(chunk)
+                        
+                        if sample_size < MAX_SAMPLE:
+                            sample_chunks.append(chunk)
+                            sample_size += len(chunk)
+                        
                         progress.update_extract_progress(len(chunk))
+
+                # Quick check if content is already valid UTF-8
+                try:
+                    for chunk in chunks:
+                        chunk.decode('utf-8')
+                    # If we get here, all chunks are valid UTF-8
+                    with open(target_path, 'wb') as target:
+                        for chunk in chunks:
+                            target.write(chunk)
+                except UnicodeError:
+                    # Need to convert encoding
+                    sample = b''.join(sample_chunks)
+                    if total_size > MAX_SAMPLE * 2:
+                        sample += chunks[-1]  # Add last chunk to sample
+                    
+                    result = chardet.detect(sample)
+                    encoding = result['encoding'] if result['encoding'] else 'utf-8'
+
+                    if encoding.lower() not in ('utf-8', 'ascii'):
+                        with open(target_path, 'wb') as target:
+                            decoder = codecs.getincrementaldecoder(encoding)()
+                            encoder = codecs.getincrementalencoder('utf-8')()
+                            
+                            for chunk in chunks:
+                                decoded = decoder.decode(chunk)
+                                encoded = encoder.encode(decoded)
+                                target.write(encoded)
+                            
+                            # Flush any remaining bytes
+                            final = encoder.encode('', final=True)
+                            if final:
+                                target.write(final)
+                        
+                        logging.info(f"Converted {zip_info.filename} from {encoding} to UTF-8")
+                    else:
+                        with open(target_path, 'wb') as target:
+                            for chunk in chunks:
+                                target.write(chunk)
+                        
             except Exception as e:
                 logging.error(f"Error extracting {zip_info.filename}: {e}", exc_info=True)
 
@@ -195,6 +309,12 @@ async def download_and_process_file(
                 for retry in range(max_retries):
                     try:
                         async with client.stream('GET', url) as response:
+                            if response.status_code == 404:
+                                logging.warning(f"File not found (404) for {url}")
+                                if content_length:
+                                    progress.update_download_total(-content_length)
+                                return  # Exit immediately on 404, no retry
+                            
                             response.raise_for_status()
                             
                             if content_length is None and 'content-length' in response.headers:
@@ -265,6 +385,12 @@ async def download_and_process_file(
                             break
 
                     except Exception as e:
+                        if isinstance(e, httpx.HTTPStatusError) and e.response.status_code == 404:
+                            logging.warning(f"File not found (404) for {url}")
+                            if content_length:
+                                progress.update_download_total(-content_length)
+                            return  # Exit immediately on 404, no retry
+                        
                         if retry == max_retries - 1:
                             logging.error(f"Error processing {url}: {e}", exc_info=True)
                             if content_length:
