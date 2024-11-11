@@ -220,7 +220,7 @@ wheels = [
 
 [[package]]
 name = "registry-downloader"
-version = "0.1.4"
+version = "0.1.5"
 source = { editable = "." }
 dependencies = [
     { name = "beautifulsoup4" },
@@ -231,8 +231,8 @@ dependencies = [
     { name = "types-tqdm" },
 ]
 
-[package.optional-dependencies]
-test = [
+[package.dev-dependencies]
+dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
@@ -244,13 +244,17 @@ requires-dist = [
     { name = "beautifulsoup4", specifier = ">=4.12.3" },
     { name = "chardet", specifier = ">=5.2.0" },
     { name = "httpx", specifier = ">=0.27.2" },
-    { name = "pytest", marker = "extra == 'test'" },
-    { name = "pytest-asyncio", marker = "extra == 'test'" },
-    { name = "pytest-cov", marker = "extra == 'test'" },
-    { name = "pytest-httpx", marker = "extra == 'test'" },
     { name = "tqdm", specifier = ">=4.67.0" },
     { name = "types-beautifulsoup4", specifier = ">=4.12.0.20241020" },
     { name = "types-tqdm", specifier = ">=4.66.0.20240417" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=8.3.3" },
+    { name = "pytest-asyncio", specifier = ">=0.24.0" },
+    { name = "pytest-cov", specifier = ">=6.0.0" },
+    { name = "pytest-httpx", specifier = ">=0.33.0" },
 ]
 
 [[package]]
