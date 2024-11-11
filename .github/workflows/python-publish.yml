@@ -32,6 +32,10 @@ jobs:
     - name: Build the project
       run: uv build
 
+
+    - name: Build the project
+      run: pytest tests/
+
     - name: Publish package
       env:
         UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}

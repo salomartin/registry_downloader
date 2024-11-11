@@ -1,2 +1,3 @@
 Write code in Python 3.13, you must always strictly fully type the code
 Always write code that's async and runs in parallel where possible
+We're using uv as package manager, so always use uv add instead of pip install etc
